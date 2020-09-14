@@ -2189,6 +2189,194 @@ class WalletBither(object):
         return False, count
 
 
+############### BIP-38 ###############
+
+def public_key_to_address(s):
+    ripemd160 = hash160(s)
+    return base58.b58encode_check((bytes([0x0]) + ripemd160))
+
+def compress(pub):
+    x = pub[1:33]
+    y = pub[33:]
+    if int.from_bytes(y, byteorder='big') % 2:
+        prefix = bytes([0x03])
+    else:
+        prefix = bytes([0x02])
+    return prefix + x
+
+def private_key_to_public_key(s):
+    sk = ecdsa.SigningKey.from_string(s, curve=ecdsa.SECP256k1)
+    return (bytes([0x04]) + sk.verifying_key.to_string())
+
+def bip38decrypt(password, encpriv, outputlotsequence=False):
+    COMPRESSION_FLAGBYTES = [0x20, 0x24, 0x28, 0x2c, 0x30, 0x34, 0x38, 0x3c, 0xe0, 0xe8, 0xf0, 0xf8]
+    LOTSEQUENCE_FLAGBYTES = [0x04, 0x0c, 0x14, 0x1c, 0x24, 0x2c, 0x34, 0x3c]
+
+    l_scrypt = pylibscrypt.scrypt
+
+    encpriv = base58.b58decode_check(encpriv)
+    assert len(encpriv) == 39
+    prefix = int.from_bytes(encpriv[:2], byteorder='big')
+    assert prefix == 0x0142 or prefix == 0x0143
+    flagbyte = int.from_bytes(encpriv[2:3], byteorder='big')
+    if prefix == 0x0142:
+        salt = encpriv[3:7]
+        msg1 = encpriv[7:23]
+        msg2 = encpriv[23:39]
+        scrypthash = l_scrypt(password, salt, 16384, 8, 8, 64)
+        key = scrypthash[32:]
+        aes = AESModeOfOperationECB(key)
+        msg1 = aes.decrypt(msg1)
+        msg2 = aes.decrypt(msg2)
+        half1 = int.from_bytes(msg1, byteorder='big') ^ int.from_bytes(scrypthash[:16], byteorder='big')
+        half2 = int.from_bytes(msg2, byteorder='big') ^ int.from_bytes(scrypthash[16:32], byteorder='big')
+        priv = half1.to_bytes(16, byteorder='big') + half2.to_bytes(16, byteorder='big')
+        priv_int = int.from_bytes(priv, byteorder='big')
+        if priv_int == 0 or priv_int >= secp256k1_n:
+            if outputlotsequence:
+                return False, False, False
+            else:
+                return False
+        pub = private_key_to_public_key(priv)
+        if flagbyte in COMPRESSION_FLAGBYTES:
+            privcompress = bytes([0x1])
+            pub = compress(pub)
+        else:
+            privcompress = bytes([])
+        address = public_key_to_address(pub)
+        addrhex = bytearray(address, 'ascii')
+        addresshash = double_sha256(addrhex)[:4]
+        if addresshash == encpriv[3:7]:
+            priv = base58.b58encode_check(bytes([0x80]) + priv + privcompress)
+            if outputlotsequence:
+                return priv, False, False
+            else:
+                return priv
+        else:
+            if outputlotsequence:
+                return False, False, False
+            else:
+                return False
+    else:
+        owner_entropy = encpriv[7:15]
+        enchalf1half1 = encpriv[15:23]
+        enchalf2 = encpriv[23:]
+        if flagbyte in LOTSEQUENCE_FLAGBYTES:
+            lotsequence = owner_entropy[4:]
+            owner_salt = owner_entropy[:4]
+        else:
+            lotsequence = False
+            owner_salt = owner_entropy
+        prefactor = l_scrypt(password, owner_salt, 16384, 8, 8, 32)
+        if lotsequence is False:
+            passfactor = prefactor
+        else:
+            passfactor = double_sha256(prefactor + owner_entropy)
+        passfactor_int = int.from_bytes(passfactor, byteorder='big')
+        if passfactor_int == 0 or passfactor_int >= secp256k1_n:
+            if outputlotsequence:
+                return False, False, False
+            else:
+                return False
+        passpoint = compress(private_key_to_public_key(passfactor))
+        password = passpoint
+        encseedb = l_scrypt(password, encpriv[3:7] + owner_entropy, 1024, 1, 1, 64)
+        key = encseedb[32:]
+        aes = AESModeOfOperationECB(key)
+        tmp = aes.decrypt(enchalf2)
+        enchalf1half2_seedblastthird = int.from_bytes(tmp, byteorder='big') ^ int.from_bytes(encseedb[16:32], byteorder='big')
+        enchalf1half2_seedblastthird = enchalf1half2_seedblastthird.to_bytes(16, byteorder='big')
+        enchalf1half2 = enchalf1half2_seedblastthird[:8]
+        enchalf1 = enchalf1half1 + enchalf1half2
+        seedb = aes.decrypt(enchalf1)
+        seedb = int.from_bytes(seedb, byteorder='big') ^ int.from_bytes(encseedb[:16], byteorder='big')
+        seedb = seedb.to_bytes(16, byteorder='big') + enchalf1half2_seedblastthird[8:]
+        assert len(seedb) == 24
+        try:
+            factorb = double_sha256(seedb)
+            factorb_int = int.from_bytes(factorb, byteorder='big')
+            assert factorb_int != 0
+            assert not factorb_int >= secp256k1_n
+        except:
+            if outputlotsequence:
+                return False, False, False
+            else:
+                return False
+        priv = ((passfactor_int * factorb_int) % secp256k1_n).to_bytes(32, byteorder='big')
+        pub = private_key_to_public_key(priv)
+        if flagbyte in COMPRESSION_FLAGBYTES:
+            privcompress = bytes([0x1])
+            pub = compress(pub)
+        else:
+            privcompress = bytes([])
+        address = public_key_to_address(pub)
+        addrhex = bytearray(address, 'ascii')
+        addresshash = double_sha256(addrhex)[:4]
+        if addresshash == encpriv[3:7]:
+            priv = base58.b58encode_check(bytes([0x80]) + priv + privcompress)
+            if outputlotsequence:
+                if lotsequence is not False:
+                    lotsequence = int(lotsequence, 16)
+                    sequence = lotsequence % 4096
+                    lot = (lotsequence - sequence) // 4096
+                    return priv, lot, sequence
+                else:
+                    return priv, False, False
+            else:
+                return priv
+        else:
+            if outputlotsequence:
+                return False, False, False
+            else:
+                return False
+
+# @register_wallet_class - not a "registered" wallet since there are no wallet files nor extracts
+class WalletBIP38(object):
+    opencl_algo = -1
+
+    def __init__(self, enc_privkey):
+        global pylibscrypt, ecdsa, double_sha256, hash160, normalize, base58, AESModeOfOperationECB, secp256k1_n
+        import pylibscrypt, ecdsa
+        from bitcoinlib.config.secp256k1 import secp256k1_n
+        from bitcoinlib.encoding import double_sha256, hash160
+        from unicodedata import normalize
+        from cashaddress import base58
+        from pyaes import AESModeOfOperationECB
+
+        self.enc_privkey = enc_privkey
+
+    def __setstate__(self, state):
+        # (re-)load the required libraries after being unpickled
+        global pylibscrypt, ecdsa, double_sha256, hash160, normalize, base58, AESModeOfOperationECB, secp256k1_n
+        import pylibscrypt, ecdsa
+        from bitcoinlib.config.secp256k1 import secp256k1_n
+        from bitcoinlib.encoding import double_sha256, hash160
+        from unicodedata import normalize
+        from cashaddress import base58
+        from pyaes import AESModeOfOperationECB
+
+        self.__dict__ = state
+
+    def passwords_per_seconds(self, seconds):
+        return max(int(round(10 * seconds)), 1)
+
+    def difficulty_info(self):
+        return "scrypt N, r, p = 16384, 8, 8 and scrypt N, r, p = 1024, 1, 1"
+
+    def return_verified_password_or_false(self, passwords):
+        return self._return_verified_password_or_false_cpu(passwords)
+
+    # This is the time-consuming function executed by worker thread(s). It returns a tuple: if a password
+    # is correct return it, else return False for item 0; return a count of passwords checked for item 1
+    def _return_verified_password_or_false_cpu(self, passwords):
+        passwords = map(lambda p: normalize("NFC", p).encode("utf_8", "ignore"), passwords)
+        for count, password in enumerate(passwords, 1):
+            if bip38decrypt(password, self.enc_privkey):
+                return password.decode("utf_8", "replace"), count
+
+        return False, count
+
+
 ############### BIP-39 ###############
 
 # @register_wallet_class - not a "registered" wallet since there are no wallet files nor extracts
@@ -2856,6 +3044,9 @@ def init_parser_common():
         parser_common.add_argument("--version","-v",action="store_true", help="show full version information and exit")
         parser_common.add_argument("--disablesecuritywarnings", "--dsw", action="store_true", help="Disable Security Warning Messages")
         parser_common.add_argument("--yoroi-master-password", metavar="Master_Password",   help="Search for the password to decrypt a Yoroi wallet master_password provided")
+        bip38_group = parser_common.add_argument_group("BIP-38 passwords")
+        bip38_group.add_argument("--bip38",       action="store_true",   help="search for a BIP-38 password instead of from a wallet")
+        bip38_group.add_argument("--enc-privkey", metavar="ENC-PRIVKEY", help="encrypted private key")
         bip39_group = parser_common.add_argument_group("BIP-39 passwords")
         bip39_group.add_argument("--bip39",      action="store_true",   help="search for a BIP-39 password instead of from a wallet")
         bip39_group.add_argument("--mpk",        metavar="XPUB",        help="the master public key")
@@ -3428,13 +3619,14 @@ def parse_arguments(effective_argv, wallet = None, base_iterator = None,
     if args.wallet:                 required_args += 1
     if args.data_extract:           required_args += 1
     if args.data_extract_string:    required_args += 1
+    if args.bip38:                  required_args += 1
     if args.bip39:                  required_args += 1
     if args.yoroi_master_password:  required_args += 1
     if args.listpass:               required_args += 1
     if wallet:                      required_args += 1
     if required_args != 1 and (args.seedgenerator == False):
         assert not wallet, 'custom wallet object not permitted with --wallet, --data-extract, --bip39, or --listpass'
-        error_exit("argument --wallet (or --data-extract, --bip39, or --listpass, exactly one) is required")
+        error_exit("argument --wallet (or --data-extract, --bip38, --bip39, or --listpass, exactly one) is required")
 
     # If specificed, use a custom wallet object instead of loading a wallet file or data-extract
     global loaded_wallet
@@ -3462,6 +3654,9 @@ def parse_arguments(effective_argv, wallet = None, base_iterator = None,
         if args.msigna_keychain and not isinstance(loaded_wallet, WalletMsigna):
             print("Warning: ignoring --msigna-keychain (wallet file is not an mSIGNA vault)")
 
+
+    if args.bip38:
+        loaded_wallet = WalletBIP38(args.enc_privkey)
 
     # Parse --bip39 related options, and create a WalletBIP39 object
     if args.bip39:

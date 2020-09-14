@@ -2,3 +2,4 @@ coincurve~=13.0.0
 green~=3.2.5
 protobuf~=3.14.0
 pycryptodome~=3.9.9
+ecdsa~=0.16.0
