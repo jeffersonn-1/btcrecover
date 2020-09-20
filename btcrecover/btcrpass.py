@@ -2289,6 +2289,15 @@ def bip38decrypt_non_ec(scrypthash, encpriv, has_compression_flag, has_lotsequen
         else:
             return False
 
+def prefactor_to_passpoint(prefactor, has_lotsequence_flag, encpriv):
+    owner_entropy = encpriv[4:12]
+    if has_lotsequence_flag:
+        passfactor = double_sha256(prefactor + owner_entropy)
+    else:
+        passfactor = prefactor
+    passpoint = compress(private_key_to_public_key(passfactor))
+    return passpoint
+
 # @register_wallet_class - not a "registered" wallet since there are no wallet files nor extracts
 class WalletBIP38(object):
     opencl_algo = -1
@@ -2342,7 +2351,32 @@ class WalletBIP38(object):
         return "scrypt N, r, p = 16384, 8, 8 and scrypt N, r, p = 1024, 1, 1"
 
     def return_verified_password_or_false(self, passwords):
-        return self._return_verified_password_or_false_cpu(passwords)
+        return self._return_verified_password_or_false_opencl(passwords) if (not isinstance(self.opencl_algo,int)) \
+          else self._return_verified_password_or_false_cpu(passwords)
+
+    def _return_verified_password_or_false_opencl(self, arg_passwords):
+        l_scrypt = pylibscrypt.scrypt
+
+        passwords = map(lambda p: normalize("NFC", p).encode("utf_8", "ignore"), arg_passwords)
+
+        if not self.ec_multiplied:
+            clResult = self.opencl_algo.cl_scrypt(self.opencl_context_scrypt, passwords, 14, 3, 3, 64, self.salt)
+            passwords = map(lambda p: normalize("NFC", p).encode("utf_8", "ignore"), arg_passwords)
+            results = zip(passwords, clResult)
+            for count, (password, scrypthash) in enumerate(results, 1):
+                if bip38decrypt_non_ec(scrypthash, self.enc_privkey, self.has_compression_flag, self.has_lotsequence_flag):
+                    return password.decode("utf_8", "replace"), count
+        else:
+            clPrefactors = self.opencl_algo.cl_scrypt(self.opencl_context_scrypt, passwords, 14, 3, 3, 32, self.salt)
+            passpoints = map(lambda p: prefactor_to_passpoint(p, self.has_lotsequence_flag, self.enc_privkey), clPrefactors)
+            encseedbs = map(lambda p: l_scrypt(p, self.enc_privkey[0:12], 1024, 1, 1, 64), passpoints)
+            passwords = map(lambda p: normalize("NFC", p).encode("utf_8", "ignore"), arg_passwords)
+            results = zip(passwords, clPrefactors, encseedbs)
+            for count, (password, prefactor, encseedb) in enumerate(results, 1):
+                if bip38decrypt_ec(prefactor, encseedb, self.enc_privkey, self.has_compression_flag, self.has_lotsequence_flag):
+                    return password.decode("utf_8", "replace"), count
+
+        return False, count
 
     # This is the time-consuming function executed by worker thread(s). It returns a tuple: if a password
     # is correct return it, else return False for item 0; return a count of passwords checked for item 1
@@ -2357,13 +2391,8 @@ class WalletBIP38(object):
                     return password.decode("utf_8", "replace"), count
             else:
                 prefactor = l_scrypt(password, self.salt, 16384, 8, 8, 32)
-                owner_entropy = self.enc_privkey[4:12]
-                if self.has_lotsequence_flag:
-                    passfactor = double_sha256(prefactor + owner_entropy)
-                else:
-                    passfactor = prefactor
-                passpoint = compress(private_key_to_public_key(passfactor))
-                encseedb = l_scrypt(passpoint, self.enc_privkey[0:4] + owner_entropy, 1024, 1, 1, 64)
+                passpoint = prefactor_to_passpoint(prefactor, self.has_lotsequence_flag, self.enc_privkey)
+                encseedb = l_scrypt(passpoint, self.enc_privkey[0:12], 1024, 1, 1, 64)
 
                 if bip38decrypt_ec(prefactor, encseedb, self.enc_privkey, self.has_compression_flag, self.has_lotsequence_flag):
                     return password.decode("utf_8", "replace"), count
