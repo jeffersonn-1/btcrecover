@@ -2208,21 +2208,13 @@ def private_key_to_public_key(s):
     sk = ecdsa.SigningKey.from_string(s, curve=ecdsa.SECP256k1)
     return (bytes([0x04]) + sk.verifying_key.to_string())
 
-def bip38decrypt(password, encpriv, outputlotsequence=False):
-    COMPRESSION_FLAGBYTES = [0x20, 0x24, 0x28, 0x2c, 0x30, 0x34, 0x38, 0x3c, 0xe0, 0xe8, 0xf0, 0xf8]
-    LOTSEQUENCE_FLAGBYTES = [0x04, 0x0c, 0x14, 0x1c, 0x24, 0x2c, 0x34, 0x3c]
-
+def bip38decrypt(password, encpriv, ec_multiplied, has_compression_flag, has_lotsequence_flag, outputlotsequence=False):
     l_scrypt = pylibscrypt.scrypt
 
-    encpriv = base58.b58decode_check(encpriv)
-    assert len(encpriv) == 39
-    prefix = int.from_bytes(encpriv[:2], byteorder='big')
-    assert prefix == 0x0142 or prefix == 0x0143
-    flagbyte = int.from_bytes(encpriv[2:3], byteorder='big')
-    if prefix == 0x0142:
-        salt = encpriv[3:7]
-        msg1 = encpriv[7:23]
-        msg2 = encpriv[23:39]
+    if not ec_multiplied:
+        salt = encpriv[0:4]
+        msg1 = encpriv[4:20]
+        msg2 = encpriv[20:36]
         scrypthash = l_scrypt(password, salt, 16384, 8, 8, 64)
         key = scrypthash[32:]
         aes = AESModeOfOperationECB(key)
@@ -2238,7 +2230,7 @@ def bip38decrypt(password, encpriv, outputlotsequence=False):
             else:
                 return False
         pub = private_key_to_public_key(priv)
-        if flagbyte in COMPRESSION_FLAGBYTES:
+        if has_compression_flag:
             privcompress = bytes([0x1])
             pub = compress(pub)
         else:
@@ -2246,7 +2238,7 @@ def bip38decrypt(password, encpriv, outputlotsequence=False):
         address = public_key_to_address(pub)
         addrhex = bytearray(address, 'ascii')
         addresshash = double_sha256(addrhex)[:4]
-        if addresshash == encpriv[3:7]:
+        if addresshash == encpriv[0:4]:
             priv = base58.b58encode_check(bytes([0x80]) + priv + privcompress)
             if outputlotsequence:
                 return priv, False, False
@@ -2258,10 +2250,10 @@ def bip38decrypt(password, encpriv, outputlotsequence=False):
             else:
                 return False
     else:
-        owner_entropy = encpriv[7:15]
-        enchalf1half1 = encpriv[15:23]
-        enchalf2 = encpriv[23:]
-        if flagbyte in LOTSEQUENCE_FLAGBYTES:
+        owner_entropy = encpriv[4:12]
+        enchalf1half1 = encpriv[12:20]
+        enchalf2 = encpriv[20:]
+        if has_lotsequence_flag:
             lotsequence = owner_entropy[4:]
             owner_salt = owner_entropy[:4]
         else:
@@ -2280,7 +2272,7 @@ def bip38decrypt(password, encpriv, outputlotsequence=False):
                 return False
         passpoint = compress(private_key_to_public_key(passfactor))
         password = passpoint
-        encseedb = l_scrypt(password, encpriv[3:7] + owner_entropy, 1024, 1, 1, 64)
+        encseedb = l_scrypt(password, encpriv[0:4] + owner_entropy, 1024, 1, 1, 64)
         key = encseedb[32:]
         aes = AESModeOfOperationECB(key)
         tmp = aes.decrypt(enchalf2)
@@ -2304,7 +2296,7 @@ def bip38decrypt(password, encpriv, outputlotsequence=False):
                 return False
         priv = ((passfactor_int * factorb_int) % secp256k1_n).to_bytes(32, byteorder='big')
         pub = private_key_to_public_key(priv)
-        if flagbyte in COMPRESSION_FLAGBYTES:
+        if has_compression_flag:
             privcompress = bytes([0x1])
             pub = compress(pub)
         else:
@@ -2312,7 +2304,7 @@ def bip38decrypt(password, encpriv, outputlotsequence=False):
         address = public_key_to_address(pub)
         addrhex = bytearray(address, 'ascii')
         addresshash = double_sha256(addrhex)[:4]
-        if addresshash == encpriv[3:7]:
+        if addresshash == encpriv[0:4]:
             priv = base58.b58encode_check(bytes([0x80]) + priv + privcompress)
             if outputlotsequence:
                 if lotsequence is not False:
@@ -2343,7 +2335,20 @@ class WalletBIP38(object):
         from cashaddress import base58
         from pyaes import AESModeOfOperationECB
 
-        self.enc_privkey = enc_privkey
+        self.enc_privkey = base58.b58decode_check(enc_privkey)
+        assert len(self.enc_privkey) == 39
+
+        prefix = int.from_bytes(self.enc_privkey[:2], byteorder='big')
+        assert prefix == 0x0142 or prefix == 0x0143
+        self.ec_multiplied = prefix == 0x0143
+
+        COMPRESSION_FLAGBYTES = [0x20, 0x24, 0x28, 0x2c, 0x30, 0x34, 0x38, 0x3c, 0xe0, 0xe8, 0xf0, 0xf8]
+        LOTSEQUENCE_FLAGBYTES = [0x04, 0x0c, 0x14, 0x1c, 0x24, 0x2c, 0x34, 0x3c]
+        flagbyte = int.from_bytes(self.enc_privkey[2:3], byteorder='big')
+        self.has_compression_flag = flagbyte in COMPRESSION_FLAGBYTES
+        self.has_lotsequence_flag = flagbyte in LOTSEQUENCE_FLAGBYTES
+
+        self.enc_privkey = self.enc_privkey[3:]
 
     def __setstate__(self, state):
         # (re-)load the required libraries after being unpickled
@@ -2371,7 +2376,7 @@ class WalletBIP38(object):
     def _return_verified_password_or_false_cpu(self, passwords):
         passwords = map(lambda p: normalize("NFC", p).encode("utf_8", "ignore"), passwords)
         for count, password in enumerate(passwords, 1):
-            if bip38decrypt(password, self.enc_privkey):
+            if bip38decrypt(password, self.enc_privkey, self.ec_multiplied, self.has_compression_flag, self.has_lotsequence_flag):
                 return password.decode("utf_8", "replace"), count
 
         return False, count
