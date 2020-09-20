@@ -2208,19 +2208,14 @@ def private_key_to_public_key(s):
     sk = ecdsa.SigningKey.from_string(s, curve=ecdsa.SECP256k1)
     return (bytes([0x04]) + sk.verifying_key.to_string())
 
-def bip38decrypt_ec(password, encpriv, has_compression_flag, has_lotsequence_flag, outputlotsequence=False):
-    l_scrypt = pylibscrypt.scrypt
-
+def bip38decrypt_ec(prefactor, encseedb, encpriv, has_compression_flag, has_lotsequence_flag, outputlotsequence=False):
     owner_entropy = encpriv[4:12]
     enchalf1half1 = encpriv[12:20]
     enchalf2 = encpriv[20:]
     if has_lotsequence_flag:
         lotsequence = owner_entropy[4:]
-        owner_salt = owner_entropy[:4]
     else:
         lotsequence = False
-        owner_salt = owner_entropy
-    prefactor = l_scrypt(password, owner_salt, 16384, 8, 8, 32)
     if lotsequence is False:
         passfactor = prefactor
     else:
@@ -2231,9 +2226,6 @@ def bip38decrypt_ec(password, encpriv, has_compression_flag, has_lotsequence_fla
             return False, False, False
         else:
             return False
-    passpoint = compress(private_key_to_public_key(passfactor))
-    password = passpoint
-    encseedb = l_scrypt(password, encpriv[0:4] + owner_entropy, 1024, 1, 1, 64)
     key = encseedb[32:]
     aes = AESModeOfOperationECB(key)
     tmp = aes.decrypt(enchalf2)
@@ -2283,13 +2275,9 @@ def bip38decrypt_ec(password, encpriv, has_compression_flag, has_lotsequence_fla
         else:
             return False
 
-def bip38decrypt_non_ec(password, encpriv, has_compression_flag, has_lotsequence_flag, outputlotsequence=False):
-    l_scrypt = pylibscrypt.scrypt
-
-    salt = encpriv[0:4]
+def bip38decrypt_non_ec(scrypthash, encpriv, has_compression_flag, has_lotsequence_flag, outputlotsequence=False):
     msg1 = encpriv[4:20]
     msg2 = encpriv[20:36]
-    scrypthash = l_scrypt(password, salt, 16384, 8, 8, 64)
     key = scrypthash[32:]
     aes = AESModeOfOperationECB(key)
     msg1 = aes.decrypt(msg1)
@@ -2352,6 +2340,12 @@ class WalletBIP38(object):
 
         self.enc_privkey = self.enc_privkey[3:]
 
+        if not self.ec_multiplied:
+            self.salt = self.enc_privkey[0:4]
+        else:
+            owner_entropy = self.enc_privkey[4:12]
+            self.salt = owner_entropy[:4] if self.has_lotsequence_flag else owner_entropy
+
     def __setstate__(self, state):
         # (re-)load the required libraries after being unpickled
         global pylibscrypt, ecdsa, double_sha256, hash160, normalize, base58, AESModeOfOperationECB, secp256k1_n
@@ -2376,11 +2370,26 @@ class WalletBIP38(object):
     # This is the time-consuming function executed by worker thread(s). It returns a tuple: if a password
     # is correct return it, else return False for item 0; return a count of passwords checked for item 1
     def _return_verified_password_or_false_cpu(self, passwords):
+        l_scrypt = pylibscrypt.scrypt
+
         passwords = map(lambda p: normalize("NFC", p).encode("utf_8", "ignore"), passwords)
-        bip38decrypt = bip38decrypt_ec if self.ec_multiplied else bip38decrypt_non_ec
         for count, password in enumerate(passwords, 1):
-            if bip38decrypt(password, self.enc_privkey, self.has_compression_flag, self.has_lotsequence_flag):
-                return password.decode("utf_8", "replace"), count
+            if not self.ec_multiplied:
+                scrypthash = l_scrypt(password, self.salt, 16384, 8, 8, 64)
+                if bip38decrypt_non_ec(scrypthash, self.enc_privkey, self.has_compression_flag, self.has_lotsequence_flag):
+                    return password.decode("utf_8", "replace"), count
+            else:
+                prefactor = l_scrypt(password, self.salt, 16384, 8, 8, 32)
+                owner_entropy = self.enc_privkey[4:12]
+                if self.has_lotsequence_flag:
+                    passfactor = double_sha256(prefactor + owner_entropy)
+                else:
+                    passfactor = prefactor
+                passpoint = compress(private_key_to_public_key(passfactor))
+                encseedb = l_scrypt(passpoint, self.enc_privkey[0:4] + owner_entropy, 1024, 1, 1, 64)
+
+                if bip38decrypt_ec(prefactor, encseedb, self.enc_privkey, self.has_compression_flag, self.has_lotsequence_flag):
+                    return password.decode("utf_8", "replace"), count
 
         return False, count
 
