@@ -2208,119 +2208,121 @@ def private_key_to_public_key(s):
     sk = ecdsa.SigningKey.from_string(s, curve=ecdsa.SECP256k1)
     return (bytes([0x04]) + sk.verifying_key.to_string())
 
-def bip38decrypt(password, encpriv, ec_multiplied, has_compression_flag, has_lotsequence_flag, outputlotsequence=False):
+def bip38decrypt_ec(password, encpriv, has_compression_flag, has_lotsequence_flag, outputlotsequence=False):
     l_scrypt = pylibscrypt.scrypt
 
-    if not ec_multiplied:
-        salt = encpriv[0:4]
-        msg1 = encpriv[4:20]
-        msg2 = encpriv[20:36]
-        scrypthash = l_scrypt(password, salt, 16384, 8, 8, 64)
-        key = scrypthash[32:]
-        aes = AESModeOfOperationECB(key)
-        msg1 = aes.decrypt(msg1)
-        msg2 = aes.decrypt(msg2)
-        half1 = int.from_bytes(msg1, byteorder='big') ^ int.from_bytes(scrypthash[:16], byteorder='big')
-        half2 = int.from_bytes(msg2, byteorder='big') ^ int.from_bytes(scrypthash[16:32], byteorder='big')
-        priv = half1.to_bytes(16, byteorder='big') + half2.to_bytes(16, byteorder='big')
-        priv_int = int.from_bytes(priv, byteorder='big')
-        if priv_int == 0 or priv_int >= secp256k1_n:
-            if outputlotsequence:
-                return False, False, False
-            else:
-                return False
-        pub = private_key_to_public_key(priv)
-        if has_compression_flag:
-            privcompress = bytes([0x1])
-            pub = compress(pub)
-        else:
-            privcompress = bytes([])
-        address = public_key_to_address(pub)
-        addrhex = bytearray(address, 'ascii')
-        addresshash = double_sha256(addrhex)[:4]
-        if addresshash == encpriv[0:4]:
-            priv = base58.b58encode_check(bytes([0x80]) + priv + privcompress)
-            if outputlotsequence:
-                return priv, False, False
-            else:
-                return priv
-        else:
-            if outputlotsequence:
-                return False, False, False
-            else:
-                return False
+    owner_entropy = encpriv[4:12]
+    enchalf1half1 = encpriv[12:20]
+    enchalf2 = encpriv[20:]
+    if has_lotsequence_flag:
+        lotsequence = owner_entropy[4:]
+        owner_salt = owner_entropy[:4]
     else:
-        owner_entropy = encpriv[4:12]
-        enchalf1half1 = encpriv[12:20]
-        enchalf2 = encpriv[20:]
-        if has_lotsequence_flag:
-            lotsequence = owner_entropy[4:]
-            owner_salt = owner_entropy[:4]
+        lotsequence = False
+        owner_salt = owner_entropy
+    prefactor = l_scrypt(password, owner_salt, 16384, 8, 8, 32)
+    if lotsequence is False:
+        passfactor = prefactor
+    else:
+        passfactor = double_sha256(prefactor + owner_entropy)
+    passfactor_int = int.from_bytes(passfactor, byteorder='big')
+    if passfactor_int == 0 or passfactor_int >= secp256k1_n:
+        if outputlotsequence:
+            return False, False, False
         else:
-            lotsequence = False
-            owner_salt = owner_entropy
-        prefactor = l_scrypt(password, owner_salt, 16384, 8, 8, 32)
-        if lotsequence is False:
-            passfactor = prefactor
+            return False
+    passpoint = compress(private_key_to_public_key(passfactor))
+    password = passpoint
+    encseedb = l_scrypt(password, encpriv[0:4] + owner_entropy, 1024, 1, 1, 64)
+    key = encseedb[32:]
+    aes = AESModeOfOperationECB(key)
+    tmp = aes.decrypt(enchalf2)
+    enchalf1half2_seedblastthird = int.from_bytes(tmp, byteorder='big') ^ int.from_bytes(encseedb[16:32], byteorder='big')
+    enchalf1half2_seedblastthird = enchalf1half2_seedblastthird.to_bytes(16, byteorder='big')
+    enchalf1half2 = enchalf1half2_seedblastthird[:8]
+    enchalf1 = enchalf1half1 + enchalf1half2
+    seedb = aes.decrypt(enchalf1)
+    seedb = int.from_bytes(seedb, byteorder='big') ^ int.from_bytes(encseedb[:16], byteorder='big')
+    seedb = seedb.to_bytes(16, byteorder='big') + enchalf1half2_seedblastthird[8:]
+    assert len(seedb) == 24
+    try:
+        factorb = double_sha256(seedb)
+        factorb_int = int.from_bytes(factorb, byteorder='big')
+        assert factorb_int != 0
+        assert not factorb_int >= secp256k1_n
+    except:
+        if outputlotsequence:
+            return False, False, False
         else:
-            passfactor = double_sha256(prefactor + owner_entropy)
-        passfactor_int = int.from_bytes(passfactor, byteorder='big')
-        if passfactor_int == 0 or passfactor_int >= secp256k1_n:
-            if outputlotsequence:
-                return False, False, False
+            return False
+    priv = ((passfactor_int * factorb_int) % secp256k1_n).to_bytes(32, byteorder='big')
+    pub = private_key_to_public_key(priv)
+    if has_compression_flag:
+        privcompress = bytes([0x1])
+        pub = compress(pub)
+    else:
+        privcompress = bytes([])
+    address = public_key_to_address(pub)
+    addrhex = bytearray(address, 'ascii')
+    addresshash = double_sha256(addrhex)[:4]
+    if addresshash == encpriv[0:4]:
+        priv = base58.b58encode_check(bytes([0x80]) + priv + privcompress)
+        if outputlotsequence:
+            if lotsequence is not False:
+                lotsequence = int(lotsequence, 16)
+                sequence = lotsequence % 4096
+                lot = (lotsequence - sequence) // 4096
+                return priv, lot, sequence
             else:
-                return False
-        passpoint = compress(private_key_to_public_key(passfactor))
-        password = passpoint
-        encseedb = l_scrypt(password, encpriv[0:4] + owner_entropy, 1024, 1, 1, 64)
-        key = encseedb[32:]
-        aes = AESModeOfOperationECB(key)
-        tmp = aes.decrypt(enchalf2)
-        enchalf1half2_seedblastthird = int.from_bytes(tmp, byteorder='big') ^ int.from_bytes(encseedb[16:32], byteorder='big')
-        enchalf1half2_seedblastthird = enchalf1half2_seedblastthird.to_bytes(16, byteorder='big')
-        enchalf1half2 = enchalf1half2_seedblastthird[:8]
-        enchalf1 = enchalf1half1 + enchalf1half2
-        seedb = aes.decrypt(enchalf1)
-        seedb = int.from_bytes(seedb, byteorder='big') ^ int.from_bytes(encseedb[:16], byteorder='big')
-        seedb = seedb.to_bytes(16, byteorder='big') + enchalf1half2_seedblastthird[8:]
-        assert len(seedb) == 24
-        try:
-            factorb = double_sha256(seedb)
-            factorb_int = int.from_bytes(factorb, byteorder='big')
-            assert factorb_int != 0
-            assert not factorb_int >= secp256k1_n
-        except:
-            if outputlotsequence:
-                return False, False, False
-            else:
-                return False
-        priv = ((passfactor_int * factorb_int) % secp256k1_n).to_bytes(32, byteorder='big')
-        pub = private_key_to_public_key(priv)
-        if has_compression_flag:
-            privcompress = bytes([0x1])
-            pub = compress(pub)
+                return priv, False, False
         else:
-            privcompress = bytes([])
-        address = public_key_to_address(pub)
-        addrhex = bytearray(address, 'ascii')
-        addresshash = double_sha256(addrhex)[:4]
-        if addresshash == encpriv[0:4]:
-            priv = base58.b58encode_check(bytes([0x80]) + priv + privcompress)
-            if outputlotsequence:
-                if lotsequence is not False:
-                    lotsequence = int(lotsequence, 16)
-                    sequence = lotsequence % 4096
-                    lot = (lotsequence - sequence) // 4096
-                    return priv, lot, sequence
-                else:
-                    return priv, False, False
-            else:
-                return priv
+            return priv
+    else:
+        if outputlotsequence:
+            return False, False, False
         else:
-            if outputlotsequence:
-                return False, False, False
-            else:
-                return False
+            return False
+
+def bip38decrypt_non_ec(password, encpriv, has_compression_flag, has_lotsequence_flag, outputlotsequence=False):
+    l_scrypt = pylibscrypt.scrypt
+
+    salt = encpriv[0:4]
+    msg1 = encpriv[4:20]
+    msg2 = encpriv[20:36]
+    scrypthash = l_scrypt(password, salt, 16384, 8, 8, 64)
+    key = scrypthash[32:]
+    aes = AESModeOfOperationECB(key)
+    msg1 = aes.decrypt(msg1)
+    msg2 = aes.decrypt(msg2)
+    half1 = int.from_bytes(msg1, byteorder='big') ^ int.from_bytes(scrypthash[:16], byteorder='big')
+    half2 = int.from_bytes(msg2, byteorder='big') ^ int.from_bytes(scrypthash[16:32], byteorder='big')
+    priv = half1.to_bytes(16, byteorder='big') + half2.to_bytes(16, byteorder='big')
+    priv_int = int.from_bytes(priv, byteorder='big')
+    if priv_int == 0 or priv_int >= secp256k1_n:
+        if outputlotsequence:
+            return False, False, False
+        else:
+            return False
+    pub = private_key_to_public_key(priv)
+    if has_compression_flag:
+        privcompress = bytes([0x1])
+        pub = compress(pub)
+    else:
+        privcompress = bytes([])
+    address = public_key_to_address(pub)
+    addrhex = bytearray(address, 'ascii')
+    addresshash = double_sha256(addrhex)[:4]
+    if addresshash == encpriv[0:4]:
+        priv = base58.b58encode_check(bytes([0x80]) + priv + privcompress)
+        if outputlotsequence:
+            return priv, False, False
+        else:
+            return priv
+    else:
+        if outputlotsequence:
+            return False, False, False
+        else:
+            return False
 
 # @register_wallet_class - not a "registered" wallet since there are no wallet files nor extracts
 class WalletBIP38(object):
@@ -2375,8 +2377,9 @@ class WalletBIP38(object):
     # is correct return it, else return False for item 0; return a count of passwords checked for item 1
     def _return_verified_password_or_false_cpu(self, passwords):
         passwords = map(lambda p: normalize("NFC", p).encode("utf_8", "ignore"), passwords)
+        bip38decrypt = bip38decrypt_ec if self.ec_multiplied else bip38decrypt_non_ec
         for count, password in enumerate(passwords, 1):
-            if bip38decrypt(password, self.enc_privkey, self.ec_multiplied, self.has_compression_flag, self.has_lotsequence_flag):
+            if bip38decrypt(password, self.enc_privkey, self.has_compression_flag, self.has_lotsequence_flag):
                 return password.decode("utf_8", "replace"), count
 
         return False, count
