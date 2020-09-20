@@ -1,3 +1,5 @@
+
+
 /*
     Scrypt OpenCL Optimized kernel
     (c) C.B. and B. Kerler 2018-2019
