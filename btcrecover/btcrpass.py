@@ -3175,6 +3175,7 @@ def parse_arguments(effective_argv, wallet = None, base_iterator = None,
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("-h", "--help",   action="store_true", help="show this help message and exit")
     parser.add_argument("--tokenlist",    metavar="FILE",      help="the list of tokens/partial passwords (required)")
+    parser.add_argument("--keep-tokens-order",  action="store_true", help="try tokens in the order in which they are listed in the file, without trying their permutations")
     parser.add_argument("--seedgenerator", action="store_true",
                                help=argparse.SUPPRESS)  # Flag to be able to indicate to generators that we are doing seed generation, not password generation
     parser.add_argument("--max-tokens",   type=int, default=sys.maxsize, metavar="COUNT", help="enforce a max # of tokens included per guess")
@@ -3198,6 +3199,9 @@ def parse_arguments(effective_argv, wallet = None, base_iterator = None,
     # Do this as early as possible so user doesn't miss any error messages
     if args.pause: enable_pause()
 
+    if args.keep_tokens_order and not args.tokenlist:
+        print("The --keep-tokens-order flag will be ignored since --tokenlist is not used")
+
     # Disable Security Warnings if parameter set...
     global disable_security_warnings
     if args.disablesecuritywarnings or disable_security_warning_param:
@@ -3216,6 +3220,7 @@ def parse_arguments(effective_argv, wallet = None, base_iterator = None,
         parser.add_argument("--passwordlist", required=not base_iterator, nargs="?", const="-", metavar="FILE", help="instead of using a tokenlist, read complete passwords (exactly one per line) from this file or from stdin")
         parser.add_argument("--has-wildcards",action="store_true", help="parse and expand wildcards inside passwordlists (default: disabled for passwordlists)")
         parser.add_argument("--tokenlist", metavar="FILE", help="the list of tokens/partial passwords (required)")
+        parser.add_argument("--keep-tokens-order",  action="store_true", help="try tokens in the order in which they are listed in the file, without trying their permutations")
         parser.add_argument("--max-tokens", type=int, default=sys.maxsize, metavar="COUNT",
                             help="enforce a max # of tokens included per guess")
         parser.add_argument("--min-tokens", type=int, default=1, metavar="COUNT",
@@ -4663,10 +4668,13 @@ def tokenlist_base_password_generator():
     # Choose between the custom duplicate-checking and the standard itertools permutation
     # functions for the outer loop unless the custom one has been specifically disabled
     # with three (or more) --no-dupcheck options.
-    if args.no_dupchecks < 3 and has_any_duplicate_tokens:
-        permutations_function = permutations_nodups
+    if args.keep_tokens_order:
+        permutations_function = lambda x: [tuple(reversed(x))]
     else:
-        permutations_function = itertools.permutations
+        if args.no_dupchecks < 3 and has_any_duplicate_tokens:
+            permutations_function = permutations_nodups
+        else:
+            permutations_function = itertools.permutations
 
     # The outer loop iterates through all possible (unordered) combinations of tokens
     # taking into account the at-most-one-token-per-line rule. Note that lines which
