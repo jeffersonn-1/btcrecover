@@ -4109,6 +4109,73 @@ class AnchoredToken(object):
     # For hashlib
     def __repr__(self):      return self.__class__.__name__ + "(" + repr(self.cached_str) + ")"
 
+def split_unquoted(string, delimiter=None):
+    """
+    Split a string on a given delimiter.
+
+    Similar to Python .split() but adds the ability to skip splitting on the
+    parts of the string that are surrounded by a double quotation mark (").
+
+    >>> split_unquoted('a "b c" d', ' ')
+    ['a', 'b c', 'd']
+
+    If the delimiter is not specified or is None, it is assumed to be a single
+    whitespace.
+
+    >>> split_unquoted('a "b c" d')
+    ['a', 'b c', 'd']
+    >>> split_unquoted('a "b c" d', None)
+    ['a', 'b c', 'd']
+
+    The double quotation mark (") can be escaped by placing (\) before it, and
+    the backslash (\) can be escaped by placing a backslash (\) before it.
+
+    Skipping any other character will raise a ValueError.
+    """
+    if delimiter is None:
+        delimiter = ' '
+    result = []
+    word = ''
+    quote_open = False
+    i = 0
+    while i < len(string):
+        # Try to skip the next char if we have a backslash
+        if string[i] == '\\' and i + 1 < len(string):
+            if string[i + 1] not in ['"', '\\']:
+                raise ValueError("Bad escape '\\{}', your can only escape one of the following chars: '\\' or '\"'.".format(string[i + 1]))
+            word += string[i + 1]
+            i = i + 2
+            continue
+
+        # Unescaped double quote should not be added to the string
+        if string[i] == '"':
+            quote_open = not quote_open
+            i = i + 1
+            continue
+
+        # Do not split inside a quoted string
+        if quote_open:
+            word += string[i]
+            i = i + 1
+        else:
+            if string[i: i + len(delimiter)] != delimiter:
+                word += string[i]
+                i = i + 1
+            else:
+                if word:
+                    result.append(word)
+                word = ''
+                i = i + len(delimiter)
+
+    if quote_open:
+        raise ValueError("The following line has unbalanced quotes: {}".format(string))
+
+    # If the end is reached without finding a split, add the remaining chars to the results
+    if word:
+        result.append(word)
+
+    return result
+
 def parse_tokenlist(tokenlist_file, first_line_num = 1):
     global token_lists
     global has_any_duplicate_tokens, has_any_wildcards, has_any_anchors
@@ -4134,7 +4201,7 @@ def parse_tokenlist(tokenlist_file, first_line_num = 1):
 
         # Remove the trailing newline, then split the line on the
         # specified delimiter (default: whitespace) to get a list of tokens
-        new_list.extend( line.strip("\r\n").split(args.delimiter) )
+        new_list.extend( split_unquoted(line.strip("\r\n"), args.delimiter) )
 
         # Ignore empty lines
         if new_list in ([None], [None, tstr('')]): continue
