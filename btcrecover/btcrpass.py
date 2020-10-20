@@ -3176,6 +3176,7 @@ def parse_arguments(effective_argv, wallet = None, base_iterator = None,
     parser.add_argument("-h", "--help",   action="store_true", help="show this help message and exit")
     parser.add_argument("--tokenlist",    metavar="FILE",      help="the list of tokens/partial passwords (required)")
     parser.add_argument("--keep-tokens-order",  action="store_true", help="try tokens in the order in which they are listed in the file, without trying their permutations")
+    parser.add_argument("--combine-tokens-with", action="extend", nargs='*', help="try to combine each two tokens with the given separators and without separators at all. this option can be specificed many times (only a single space " " is tried as a separator by default)")
     parser.add_argument("--seedgenerator", action="store_true",
                                help=argparse.SUPPRESS)  # Flag to be able to indicate to generators that we are doing seed generation, not password generation
     parser.add_argument("--max-tokens",   type=int, default=sys.maxsize, metavar="COUNT", help="enforce a max # of tokens included per guess")
@@ -3221,6 +3222,7 @@ def parse_arguments(effective_argv, wallet = None, base_iterator = None,
         parser.add_argument("--has-wildcards",action="store_true", help="parse and expand wildcards inside passwordlists (default: disabled for passwordlists)")
         parser.add_argument("--tokenlist", metavar="FILE", help="the list of tokens/partial passwords (required)")
         parser.add_argument("--keep-tokens-order",  action="store_true", help="try tokens in the order in which they are listed in the file, without trying their permutations")
+        parser.add_argument("--combine-tokens-with", action="extend", nargs='*', help="try to combine each two tokens with the given separators and without separators at all. this option can be specificed many times (only a single space " " is tried as a separator by default)")
         parser.add_argument("--max-tokens", type=int, default=sys.maxsize, metavar="COUNT",
                             help="enforce a max # of tokens included per guess")
         parser.add_argument("--min-tokens", type=int, default=1, metavar="COUNT",
@@ -3256,6 +3258,17 @@ def parse_arguments(effective_argv, wallet = None, base_iterator = None,
         for i, dev in enumerate(devices_avail, 1):
             print("#"+str(i), dev.name.strip())
         sys.exit(0)
+
+    if args.combine_tokens_with is None:
+        # If --combine-tokens-with is not used, try either a space as separator
+        # or no separator at all ('')
+        args.combine_tokens_with = ['', ' ']
+    else:
+        # Make sure there is a '' added to args.combine_tokens_with, which
+        # represents the case of not having a separator
+        args.combine_tokens_with.append('')
+    # There is no need for trying the same separator multiple times
+    args.combine_tokens_with = list(dict.fromkeys(args.combine_tokens_with))
 
     # If we're not --restoring nor using a passwordlist, try to open the tokenlist_file now
     # (if we are restoring, we don't know what to open until after the restore data is loaded)
@@ -4708,6 +4721,11 @@ def generator_product(initial_value, generator, *other_generators):
                 yield final_value
 
 
+def combine_with_separators(tokens, separators):
+    for seps in itertools.product(separators, repeat=len(tokens) - 1):
+        c = [x for x in itertools.chain.from_iterable(itertools.zip_longest(tokens, seps)) if x]
+        yield tuple(c)
+
 # The tokenlist generator function produces all possible password permutations from the
 # token_lists global as constructed by parse_tokenlist(). These passwords are then used
 # by password_generator() as base passwords that can undergo further modifications.
@@ -4833,58 +4851,59 @@ def tokenlist_base_password_generator():
         # combination of tokens and combines the tokens to create a password string.
         # Because positionally anchored tokens can only appear in one position, they
         # are not passed to the permutations_function.
-        for ordered_token_guess in permutations_function(tokens_combination_nopos):
-            # If multiple relative anchors are in a guess, they must appear in the correct
-            # relative order. If any are out of place, we continue on to the next guess.
-            # Otherwise, we remove the anchor information leaving only the string behind.
-            if rel_anchors_count:
-                invalid_anchors   = False
-                last_relative_pos = 0
-                for i, token in enumerate(ordered_token_guess):
-                    if l_type(token) == AnchoredToken and token.type == AnchoredToken.RELATIVE:
-                        if token.pos < last_relative_pos:
-                            invalid_anchors = True
-                            break
-                        if l_type(ordered_token_guess) != l_list:
-                            ordered_token_guess = l_list(ordered_token_guess)
-                        ordered_token_guess[i] = token.text  # now it's just a string
-                        if rel_anchors_count == 1:  # with only one, it's always valid
-                            break
-                        last_relative_pos = token.pos
-                if invalid_anchors: continue
-
-            # Insert the positional anchors we removed above back into the guess
-            if positional_anchors:
-                ordered_token_guess = l_list(ordered_token_guess)
-                for i, token in enumerate(positional_anchors):
-                    if token is not None:
-                        ordered_token_guess.insert(i, token)  # (token here is just a string)
-
-            # The last type of anchor has a range of possible positions for the anchored
-            # token. If any anchored token is outside of its permissible range, we continue
-            # on to the next guess. Otherwise, we remove the anchor information leaving
-            # only the string behind.
-            if has_any_mid_anchors:
-                if l_type(ordered_token_guess[0])  == AnchoredToken or \
-                   l_type(ordered_token_guess[-1]) == AnchoredToken:
-                    continue  # middle anchors are never permitted at the beginning or end
-                invalid_anchors = False
-                for i, token in enumerate(ordered_token_guess[1:-1], 1):
-                    if l_type(token) == AnchoredToken:
-                        assert token.type == AnchoredToken.MIDDLE, "only middle/range anchors left"
-                        if token.begin <= i <= token.end:
+        for ordered_token_guess_no_separators in permutations_function(tokens_combination_nopos):
+            for ordered_token_guess in combine_with_separators(ordered_token_guess_no_separators, args.combine_tokens_with):
+                # If multiple relative anchors are in a guess, they must appear in the correct
+                # relative order. If any are out of place, we continue on to the next guess.
+                # Otherwise, we remove the anchor information leaving only the string behind.
+                if rel_anchors_count:
+                    invalid_anchors   = False
+                    last_relative_pos = 0
+                    for i, token in enumerate(ordered_token_guess):
+                        if l_type(token) == AnchoredToken and token.type == AnchoredToken.RELATIVE:
+                            if token.pos < last_relative_pos:
+                                invalid_anchors = True
+                                break
                             if l_type(ordered_token_guess) != l_list:
                                 ordered_token_guess = l_list(ordered_token_guess)
                             ordered_token_guess[i] = token.text  # now it's just a string
-                        else:
-                            invalid_anchors = True
-                            break
-                if invalid_anchors: continue
+                            if rel_anchors_count == 1:  # with only one, it's always valid
+                                break
+                            last_relative_pos = token.pos
+                    if invalid_anchors: continue
 
-            if l_seed_generator:
-                yield ordered_token_guess
-            else:
-                yield l_tstr().join(ordered_token_guess)
+                # Insert the positional anchors we removed above back into the guess
+                if positional_anchors:
+                    ordered_token_guess = l_list(ordered_token_guess)
+                    for i, token in enumerate(positional_anchors):
+                        if token is not None:
+                            ordered_token_guess.insert(i, token)  # (token here is just a string)
+
+                # The last type of anchor has a range of possible positions for the anchored
+                # token. If any anchored token is outside of its permissible range, we continue
+                # on to the next guess. Otherwise, we remove the anchor information leaving
+                # only the string behind.
+                if has_any_mid_anchors:
+                    if l_type(ordered_token_guess[0])  == AnchoredToken or \
+                       l_type(ordered_token_guess[-1]) == AnchoredToken:
+                        continue  # middle anchors are never permitted at the beginning or end
+                    invalid_anchors = False
+                    for i, token in enumerate(ordered_token_guess[1:-1], 1):
+                        if l_type(token) == AnchoredToken:
+                            assert token.type == AnchoredToken.MIDDLE, "only middle/range anchors left"
+                            if token.begin <= i <= token.end:
+                                if l_type(ordered_token_guess) != l_list:
+                                    ordered_token_guess = l_list(ordered_token_guess)
+                                ordered_token_guess[i] = token.text  # now it's just a string
+                            else:
+                                invalid_anchors = True
+                                break
+                    if invalid_anchors: continue
+
+                if l_seed_generator:
+                    yield ordered_token_guess
+                else:
+                    yield l_tstr().join(ordered_token_guess)
 
     if l_token_combination_dups: l_token_combination_dups.run_finished()
 
