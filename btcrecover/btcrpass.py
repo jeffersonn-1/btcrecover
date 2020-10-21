@@ -3031,7 +3031,7 @@ def parse_arguments(effective_argv, wallet = None, base_iterator = None,
     parser.add_argument("-h", "--help",   action="store_true", help="show this help message and exit")
     parser.add_argument("--tokenlist",    metavar="FILE",      help="the list of tokens/partial passwords (required)")
     parser.add_argument("--keep-tokens-order",  action="store_true", help="try tokens in the order in which they are listed in the file, without trying their permutations")
-    parser.add_argument("--combine-tokens-with", action="extend", nargs='*', help="try to combine each two tokens with the given separators and without separators at all. this option can be specificed many times (only a single space " " is tried as a separator by default)")
+    parser.add_argument("--combine-tokens-with", action="append", nargs='*', help="try to combine each two tokens with the given separators and without separators at all. this option can be specificed many times (only a single space " " is tried as a separator by default)")
     parser.add_argument("--seedgenerator", action="store_true",
                                help=argparse.SUPPRESS)  # Flag to be able to indicate to generators that we are doing seed generation, not password generation
     parser.add_argument("--max-tokens",   type=int, default=sys.maxsize, metavar="COUNT", help="enforce a max # of tokens included per guess")
@@ -3077,7 +3077,7 @@ def parse_arguments(effective_argv, wallet = None, base_iterator = None,
         parser.add_argument("--has-wildcards",action="store_true", help="parse and expand wildcards inside passwordlists (default: disabled for passwordlists)")
         parser.add_argument("--tokenlist", metavar="FILE", help="the list of tokens/partial passwords (required)")
         parser.add_argument("--keep-tokens-order",  action="store_true", help="try tokens in the order in which they are listed in the file, without trying their permutations")
-        parser.add_argument("--combine-tokens-with", action="extend", nargs='*', help="try to combine each two tokens with the given separators and without separators at all. this option can be specificed many times (only a single space " " is tried as a separator by default)")
+        parser.add_argument("--combine-tokens-with", action="append", nargs='*', help="try to combine each two tokens with the given separators and without separators at all. this option can be specificed many times (only a single space " " is tried as a separator by default)")
         parser.add_argument("--max-tokens", type=int, default=sys.maxsize, metavar="COUNT",
                             help="enforce a max # of tokens included per guess")
         parser.add_argument("--min-tokens", type=int, default=1, metavar="COUNT",
@@ -3117,11 +3117,13 @@ def parse_arguments(effective_argv, wallet = None, base_iterator = None,
     if args.combine_tokens_with is None:
         # If --combine-tokens-with is not used, try either a space as separator
         # or no separator at all ('')
-        args.combine_tokens_with = ['', ' ']
+        args.combine_tokens_with = [[''], [' ']]
     else:
         # Make sure there is a '' added to args.combine_tokens_with, which
         # represents the case of not having a separator
-        args.combine_tokens_with.append('')
+        args.combine_tokens_with.append([''])
+    # Flatten the list of args (e.g. [[''], [' ', '--'], [',']] -> ['', ' ', '--', ','])
+    args.combine_tokens_with = list(itertools.chain.from_iterable(args.combine_tokens_with))
     # There is no need for trying the same separator multiple times
     args.combine_tokens_with = list(dict.fromkeys(args.combine_tokens_with))
 
