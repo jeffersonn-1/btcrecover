@@ -3032,6 +3032,7 @@ def parse_arguments(effective_argv, wallet = None, base_iterator = None,
     parser.add_argument("--tokenlist",    metavar="FILE",      help="the list of tokens/partial passwords (required)")
     parser.add_argument("--keep-tokens-order",  action="store_true", help="try tokens in the order in which they are listed in the file, without trying their permutations")
     parser.add_argument("--combine-tokens-with", action="append", nargs='*', help="try to combine each two tokens with the given separators and without separators at all. this option can be specificed many times (only a single space " " is tried as a separator by default)")
+    parser.add_argument("--changing-case",     type=int, metavar="LEVEL", help="try to change the cases of the letters by the given level")
     parser.add_argument("--seedgenerator", action="store_true",
                                help=argparse.SUPPRESS)  # Flag to be able to indicate to generators that we are doing seed generation, not password generation
     parser.add_argument("--max-tokens",   type=int, default=sys.maxsize, metavar="COUNT", help="enforce a max # of tokens included per guess")
@@ -3078,6 +3079,7 @@ def parse_arguments(effective_argv, wallet = None, base_iterator = None,
         parser.add_argument("--tokenlist", metavar="FILE", help="the list of tokens/partial passwords (required)")
         parser.add_argument("--keep-tokens-order",  action="store_true", help="try tokens in the order in which they are listed in the file, without trying their permutations")
         parser.add_argument("--combine-tokens-with", action="append", nargs='*', help="try to combine each two tokens with the given separators and without separators at all. this option can be specificed many times (only a single space " " is tried as a separator by default)")
+        parser.add_argument("--changing-case",     type=int, metavar="LEVEL", help="try to change the cases of the letters by the given level")
         parser.add_argument("--max-tokens", type=int, default=sys.maxsize, metavar="COUNT",
                             help="enforce a max # of tokens included per guess")
         parser.add_argument("--min-tokens", type=int, default=1, metavar="COUNT",
@@ -4434,6 +4436,7 @@ def password_generator(chunksize = 1, only_yield_count = False):
         if args.typos_swap:      modification_generators.append( swap_typos_generator       )
         if enabled_simple_typos: modification_generators.append( simple_typos_generator     )
         if args.typos_insert:    modification_generators.append( insert_typos_generator     )
+        if args.changing_case:   modification_generators.append( case_changing_generator    )
     modification_generators_len = len(modification_generators)
 
     # Only the last typo generator needs to enforce a min-typos requirement
@@ -5326,6 +5329,119 @@ def simple_typos_generator(password_base, min_typos = 0):
                     yield password
 
         typos_sofar -= typos_count
+
+def all_combinations(elements):
+    return itertools.chain.from_iterable(
+        itertools.combinations(elements, i) for i in range(len(elements) + 1))
+
+def case_changing_to_upper_first_in_string(password_base, only_to_upper):
+    yield password_base
+    case_id = case_id_of(password_base[0])
+    if (only_to_upper and case_id == LOWERCASE_ID) or (not only_to_upper and case_id != UNCASED_ID):
+        password = password_base[0].swapcase() + password_base[1:]
+        yield password
+
+def case_changing_to_upper_first_in_word(password_base, only_to_upper):
+    # store the index of the first char of each word
+    beginnings = []
+    for i in range(len(password_base)):
+        if i == 0 or password_base[i - 1] == ' ':
+            case_id = case_id_of(password_base[i])
+            if (case_id == LOWERCASE_ID) or (not only_to_upper and case_id != UNCASED_ID):
+                beginnings.append(i)
+
+    password = list(password_base)
+    for combination in all_combinations(beginnings):
+        for i in combination:
+            password[i] = password[i].swapcase()
+        yield ''.join(password)
+        for i in combination:
+            password[i] = password[i].swapcase()
+
+def case_changing_entire_word(password_base, only_to_upper):
+    # store the [begin, end[ of each word in the password
+    words = []
+    for i in range(len(password_base)):
+        if (i == 0 or password_base[i - 1] == ' '):
+            words.append(i)
+        if len(words) % 2 == 1:
+            if i + 1 == len(password_base):
+                words.append(i + 1)
+            elif password_base[i] == ' ':
+                words.append(i)
+    words = list(zip(words[0::2], words[1::2]))
+
+    password = list(password_base)
+    for combination in all_combinations(words):
+        if not combination:
+            yield password_base
+            continue
+
+        # turn all lowercase letters to uppercase letters
+        for start, end in combination:
+            for i in range(start, end):
+                if case_id_of(password[i]) == LOWERCASE_ID:
+                    password[i] = password[i].swapcase()
+
+        yield ''.join(password)
+
+        # turn all changed letters to their original case
+        for start, end in combination:
+            for i in range(start, end):
+                if case_id_changed(case_id_of(password[i]), case_id_of(password_base[i])):
+                    password[i] = password[i].swapcase()
+
+        # if only_to_upper is True, there is no need to try changing words to all lowercase
+        if only_to_upper:
+            continue
+
+        # turn all uppercase letters to lowercase letters
+        for start, end in combination:
+            for i in range(start, end):
+                if case_id_of(password[i]) == UPPERCASE_ID:
+                    password[i] = password[i].swapcase()
+
+        yield ''.join(password)
+
+        # turn all changed letters to their original case
+        for start, end in combination:
+            for i in range(start, end):
+                if case_id_changed(case_id_of(password[i]), case_id_of(password_base[i])):
+                    password[i] = password[i].swapcase()
+
+def case_changing_each_letter(password_base):
+    # store the index of each letter in the password
+    letters = []
+    for i in range(len(password_base)):
+        case_id = case_id_of(password_base[i])
+        if case_id != UNCASED_ID:
+            letters.append(i)
+
+    password = list(password_base)
+    for combination in all_combinations(letters):
+        for i in combination:
+            password[i] = password[i].swapcase()
+        yield ''.join(password)
+        for i in combination:
+            password[i] = password[i].swapcase()
+
+def case_changing_generator(password_base):
+    if args.changing_case == 1:
+        return case_changing_to_upper_first_in_string(password_base, True)
+    elif args.changing_case == 2:
+        return case_changing_to_upper_first_in_word(password_base, True)
+    elif args.changing_case == 3:
+        return case_changing_entire_word(password_base, True)
+    elif args.changing_case == 4:
+        return case_changing_to_upper_first_in_string(password_base, False)
+    elif args.changing_case == 5:
+        return case_changing_to_upper_first_in_word(password_base, False)
+    elif args.changing_case == 6:
+        return case_changing_entire_word(password_base, False)
+    elif args.changing_case == 7:
+        return case_changing_each_letter(password_base)
+    else:
+        raise ValueError("The --changing-case option can only take values between 1 and 7 inclusive")
 
 # product_max_elements() is a generator function similar to itertools.product() except that
 # it takes an extra argument:
