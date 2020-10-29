@@ -4436,7 +4436,6 @@ def password_generator(chunksize = 1, only_yield_count = False):
         if args.typos_swap:      modification_generators.append( swap_typos_generator       )
         if enabled_simple_typos: modification_generators.append( simple_typos_generator     )
         if args.typos_insert:    modification_generators.append( insert_typos_generator     )
-        if args.changing_case:   modification_generators.append( case_changing_generator    )
     modification_generators_len = len(modification_generators)
 
     # Only the last typo generator needs to enforce a min-typos requirement
@@ -4682,58 +4681,59 @@ def tokenlist_base_password_generator():
         # Because positionally anchored tokens can only appear in one position, they
         # are not passed to the permutations_function.
         for ordered_token_guess_no_separators in permutations_function(tokens_combination_nopos):
-            for ordered_token_guess in combine_with_separators(ordered_token_guess_no_separators, args.combine_tokens_with):
-                # If multiple relative anchors are in a guess, they must appear in the correct
-                # relative order. If any are out of place, we continue on to the next guess.
-                # Otherwise, we remove the anchor information leaving only the string behind.
-                if rel_anchors_count:
-                    invalid_anchors   = False
-                    last_relative_pos = 0
-                    for i, token in enumerate(ordered_token_guess):
-                        if l_type(token) == AnchoredToken and token.type == AnchoredToken.RELATIVE:
-                            if token.pos < last_relative_pos:
-                                invalid_anchors = True
-                                break
-                            if l_type(ordered_token_guess) != l_list:
-                                ordered_token_guess = l_list(ordered_token_guess)
-                            ordered_token_guess[i] = token.text  # now it's just a string
-                            if rel_anchors_count == 1:  # with only one, it's always valid
-                                break
-                            last_relative_pos = token.pos
-                    if invalid_anchors: continue
-
-                # Insert the positional anchors we removed above back into the guess
-                if positional_anchors:
-                    ordered_token_guess = l_list(ordered_token_guess)
-                    for i, token in enumerate(positional_anchors):
-                        if token is not None:
-                            ordered_token_guess.insert(i, token)  # (token here is just a string)
-
-                # The last type of anchor has a range of possible positions for the anchored
-                # token. If any anchored token is outside of its permissible range, we continue
-                # on to the next guess. Otherwise, we remove the anchor information leaving
-                # only the string behind.
-                if has_any_mid_anchors:
-                    if l_type(ordered_token_guess[0])  == AnchoredToken or \
-                       l_type(ordered_token_guess[-1]) == AnchoredToken:
-                        continue  # middle anchors are never permitted at the beginning or end
-                    invalid_anchors = False
-                    for i, token in enumerate(ordered_token_guess[1:-1], 1):
-                        if l_type(token) == AnchoredToken:
-                            assert token.type == AnchoredToken.MIDDLE, "only middle/range anchors left"
-                            if token.begin <= i <= token.end:
+            for ordered_token_guess_no_case_changed in combine_with_separators(ordered_token_guess_no_separators, args.combine_tokens_with):
+                for ordered_token_guess in case_changing_generator(ordered_token_guess_no_case_changed):
+                    # If multiple relative anchors are in a guess, they must appear in the correct
+                    # relative order. If any are out of place, we continue on to the next guess.
+                    # Otherwise, we remove the anchor information leaving only the string behind.
+                    if rel_anchors_count:
+                        invalid_anchors   = False
+                        last_relative_pos = 0
+                        for i, token in enumerate(ordered_token_guess):
+                            if l_type(token) == AnchoredToken and token.type == AnchoredToken.RELATIVE:
+                                if token.pos < last_relative_pos:
+                                    invalid_anchors = True
+                                    break
                                 if l_type(ordered_token_guess) != l_list:
                                     ordered_token_guess = l_list(ordered_token_guess)
                                 ordered_token_guess[i] = token.text  # now it's just a string
-                            else:
-                                invalid_anchors = True
-                                break
-                    if invalid_anchors: continue
+                                if rel_anchors_count == 1:  # with only one, it's always valid
+                                    break
+                                last_relative_pos = token.pos
+                        if invalid_anchors: continue
 
-                if l_seed_generator:
-                    yield ordered_token_guess
-                else:
-                    yield l_tstr().join(ordered_token_guess)
+                    # Insert the positional anchors we removed above back into the guess
+                    if positional_anchors:
+                        ordered_token_guess = l_list(ordered_token_guess)
+                        for i, token in enumerate(positional_anchors):
+                            if token is not None:
+                                ordered_token_guess.insert(i, token)  # (token here is just a string)
+
+                    # The last type of anchor has a range of possible positions for the anchored
+                    # token. If any anchored token is outside of its permissible range, we continue
+                    # on to the next guess. Otherwise, we remove the anchor information leaving
+                    # only the string behind.
+                    if has_any_mid_anchors:
+                        if l_type(ordered_token_guess[0])  == AnchoredToken or \
+                           l_type(ordered_token_guess[-1]) == AnchoredToken:
+                            continue  # middle anchors are never permitted at the beginning or end
+                        invalid_anchors = False
+                        for i, token in enumerate(ordered_token_guess[1:-1], 1):
+                            if l_type(token) == AnchoredToken:
+                                assert token.type == AnchoredToken.MIDDLE, "only middle/range anchors left"
+                                if token.begin <= i <= token.end:
+                                    if l_type(ordered_token_guess) != l_list:
+                                        ordered_token_guess = l_list(ordered_token_guess)
+                                    ordered_token_guess[i] = token.text  # now it's just a string
+                                else:
+                                    invalid_anchors = True
+                                    break
+                        if invalid_anchors: continue
+
+                    if l_seed_generator:
+                        yield ordered_token_guess
+                    else:
+                        yield l_tstr().join(ordered_token_guess)
 
     if l_token_combination_dups: l_token_combination_dups.run_finished()
 
@@ -5334,112 +5334,103 @@ def all_combinations(elements):
     return itertools.chain.from_iterable(
         itertools.combinations(elements, i) for i in range(len(elements) + 1))
 
-def case_changing_to_upper_first_in_string(password_base, only_to_upper):
-    yield password_base
-    case_id = case_id_of(password_base[0])
+def case_changing_to_upper_first_in_string(tokens, only_to_upper):
+    print("entered this function")
+    yield tokens
+    first_token = tokens[0]
+    case_id = case_id_of(first_token[0])
     if (only_to_upper and case_id == LOWERCASE_ID) or (not only_to_upper and case_id != UNCASED_ID):
-        password = password_base[0].swapcase() + password_base[1:]
-        yield password
+        new_first_token = first_token[0].swapcase() + first_token[1:]
+        new_tokens = (new_first_token,) + tokens[1:]
+        yield new_tokens
 
-def case_changing_to_upper_first_in_word(password_base, only_to_upper):
-    # store the index of the first char of each word
-    beginnings = []
-    for i in range(len(password_base)):
-        if i == 0 or password_base[i - 1] == ' ':
-            case_id = case_id_of(password_base[i])
-            if (case_id == LOWERCASE_ID) or (not only_to_upper and case_id != UNCASED_ID):
-                beginnings.append(i)
+def case_changing_to_upper_first_in_token(tokens, only_to_upper):
+    tokens_with_letter = []
+    for i, token in enumerate(tokens):
+        case_id = case_id_of(token[0])
+        if (case_id == LOWERCASE_ID) or (not only_to_upper and case_id != UNCASED_ID):
+            tokens_with_letter.append(i)
 
-    password = list(password_base)
-    for combination in all_combinations(beginnings):
+    tokens_list = list(tokens)
+    for combination in all_combinations(tokens_with_letter):
         for i in combination:
-            password[i] = password[i].swapcase()
-        yield ''.join(password)
+            tokens_list[i] = tokens_list[i][0].swapcase() + tokens_list[i][1:]
+        yield tuple(tokens_list)
         for i in combination:
-            password[i] = password[i].swapcase()
+            tokens_list[i] = tokens_list[i][0].swapcase() + tokens_list[i][1:]
 
-def case_changing_entire_word(password_base, only_to_upper):
-    # store the [begin, end[ of each word in the password
-    words = []
-    for i in range(len(password_base)):
-        if (i == 0 or password_base[i - 1] == ' '):
-            words.append(i)
-        if len(words) % 2 == 1:
-            if i + 1 == len(password_base):
-                words.append(i + 1)
-            elif password_base[i] == ' ':
-                words.append(i)
-    words = list(zip(words[0::2], words[1::2]))
+def case_changing_entire_token(tokens, only_to_upper):
+    lower_and_mixed = []
+    upper_and_mixed = []
+    for i, token in enumerate(tokens):
+        # words without any letters can't be converted, and should not be added
+        if any(c.isalpha() for c in token):
+            if token.islower():
+                lower_and_mixed.append(i)
+            elif token.isupper():
+                upper_and_mixed.append(i)
+            else:
+                lower_and_mixed.append(i)
+                upper_and_mixed.append(i)
 
-    password = list(password_base)
-    for combination in all_combinations(words):
+    yield tokens
+
+    tokens_list = list(tokens)
+    for combination in all_combinations(lower_and_mixed):
         if not combination:
-            yield password_base
             continue
+        for i in combination:
+            tokens_list[i] = tokens_list[i].upper()
+        yield tuple(tokens_list)
+        for i in combination:
+            tokens_list[i] = tokens[i]
 
-        # turn all lowercase letters to uppercase letters
-        for start, end in combination:
-            for i in range(start, end):
-                if case_id_of(password[i]) == LOWERCASE_ID:
-                    password[i] = password[i].swapcase()
+    if only_to_upper:
+        return
 
-        yield ''.join(password)
-
-        # turn all changed letters to their original case
-        for start, end in combination:
-            for i in range(start, end):
-                if case_id_changed(case_id_of(password[i]), case_id_of(password_base[i])):
-                    password[i] = password[i].swapcase()
-
-        # if only_to_upper is True, there is no need to try changing words to all lowercase
-        if only_to_upper:
+    for combination in all_combinations(upper_and_mixed):
+        if not combination:
             continue
+        for i in combination:
+            tokens_list[i] = tokens_list[i].lower()
+        yield tuple(tokens_list)
+        for i in combination:
+            tokens_list[i] = tokens[i]
 
-        # turn all uppercase letters to lowercase letters
-        for start, end in combination:
-            for i in range(start, end):
-                if case_id_of(password[i]) == UPPERCASE_ID:
-                    password[i] = password[i].swapcase()
-
-        yield ''.join(password)
-
-        # turn all changed letters to their original case
-        for start, end in combination:
-            for i in range(start, end):
-                if case_id_changed(case_id_of(password[i]), case_id_of(password_base[i])):
-                    password[i] = password[i].swapcase()
-
-def case_changing_each_letter(password_base):
-    # store the index of each letter in the password
+def case_changing_each_letter(tokens):
     letters = []
-    for i in range(len(password_base)):
-        case_id = case_id_of(password_base[i])
-        if case_id != UNCASED_ID:
-            letters.append(i)
+    for i, token in enumerate(tokens):
+        for j, char in enumerate(token):
+            if case_id_of(char):
+                letters.append((i, j))
 
-    password = list(password_base)
+    tokens_list = list(tokens)
     for combination in all_combinations(letters):
-        for i in combination:
-            password[i] = password[i].swapcase()
-        yield ''.join(password)
-        for i in combination:
-            password[i] = password[i].swapcase()
+        for token_idx, char_idx in combination:
+            cur_token = tokens_list[token_idx]
+            tokens_list[token_idx] = cur_token[:char_idx] + cur_token[char_idx].swapcase() + cur_token[char_idx + 1:]
+        yield tuple(tokens_list)
+        for token_idx, char_idx in combination:
+            cur_token = tokens_list[token_idx]
+            tokens_list[token_idx] = cur_token[:char_idx] + cur_token[char_idx].swapcase() + cur_token[char_idx + 1:]
 
-def case_changing_generator(password_base):
-    if args.changing_case == 1:
-        return case_changing_to_upper_first_in_string(password_base, True)
+def case_changing_generator(tokens):
+    if args.changing_case is None:
+        yield tokens
+    elif args.changing_case == 1:
+        yield from case_changing_to_upper_first_in_string(tokens, True)
     elif args.changing_case == 2:
-        return case_changing_to_upper_first_in_word(password_base, True)
+        yield from case_changing_to_upper_first_in_token(tokens, True)
     elif args.changing_case == 3:
-        return case_changing_entire_word(password_base, True)
+        yield from case_changing_entire_token(tokens, True)
     elif args.changing_case == 4:
-        return case_changing_to_upper_first_in_string(password_base, False)
+        yield from case_changing_to_upper_first_in_string(tokens, False)
     elif args.changing_case == 5:
-        return case_changing_to_upper_first_in_word(password_base, False)
+        yield from case_changing_to_upper_first_in_token(tokens, False)
     elif args.changing_case == 6:
-        return case_changing_entire_word(password_base, False)
+        yield from case_changing_entire_token(tokens, False)
     elif args.changing_case == 7:
-        return case_changing_each_letter(password_base)
+        yield from case_changing_each_letter(tokens)
     else:
         raise ValueError("The --changing-case option can only take values between 1 and 7 inclusive")
 
