@@ -5510,7 +5510,6 @@ def all_combinations(elements):
         itertools.combinations(elements, i) for i in range(len(elements) + 1))
 
 def case_changing_to_upper_first_in_string(tokens, only_to_upper):
-    print("entered this function")
     yield tokens
     first_token = tokens[0]
     case_id = case_id_of(first_token[0])
