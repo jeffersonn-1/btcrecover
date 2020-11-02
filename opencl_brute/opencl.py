@@ -257,7 +257,7 @@ class opencl_interface:
             memoryForOneCore = BLOCK_LEN_BYTES * 2 + N_blocks_bytes  # input, output & V
 
             ## ! Restrict to half the memory for now
-            coresOnDevice = (int(0.5 * device.global_mem_size) // memoryForOneCore)
+            coresOnDevice = (int(0.9 * device.global_mem_size) // memoryForOneCore)
             percentUsage = 100 * memoryForOneCore * coresOnDevice / device.global_mem_size
             percentUsage = str(percentUsage)[:4]
             if self.debug == 1:
@@ -277,7 +277,7 @@ class opencl_interface:
         # no. of cores' memory that we can fit into a single buffer
         #   (seemingly anyway, why isn't it 2^31?)
         # note: this is NOT the workgroupsize, nor does it bound it
-        maxGangSize = (1 << 29) // N_blocks_bytes
+        maxGangSize = (1 << 31) // N_blocks_bytes
         assert maxGangSize > 0, "Uh-oh we couldn't fit a single core's V in a buffer."
 
 
@@ -388,7 +388,7 @@ class opencl_algos:
         # Initialise the openCL context & compile, with both debugging settings off
         debug = 0
         bufStructs = buffer_structs()
-        sprg=self.opencl_ctx.compile(bufStructs, "sCrypt.cl", None, N=N_value, invMemoryDensity=self.inv_memory_density)
+        sprg=self.opencl_ctx.compile(bufStructs, "scrypt.cl", None, N=N_value, invMemoryDensity=self.inv_memory_density)
         return [sprg,bufStructs]
 
     def cl_scrypt(self, ctx, passwords, N_value=15, r_value=3, p_value=1, desired_key_length=32,
