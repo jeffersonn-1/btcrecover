@@ -2371,7 +2371,7 @@ class WalletBIP38(object):
         return max(int(round(10 * seconds)), 1)
 
     def difficulty_info(self):
-        return "scrypt N, r, p = 16384, 8, 8 and scrypt N, r, p = 1024, 1, 1"
+        return "scrypt N, r, p = 16384, 8, 8"
 
     def return_verified_password_or_false(self, passwords):
         return self._return_verified_password_or_false_opencl(passwords) if (not isinstance(self.opencl_algo,int)) \
@@ -3862,7 +3862,13 @@ def parse_arguments(effective_argv, wallet = None, base_iterator = None,
             loaded_wallet.opencl_device_worksize = args.opencl_workgroup_size[0]
             loaded_wallet.chunksize = args.opencl_workgroup_size[0]
         else:
-            loaded_wallet.chunksize = loaded_wallet.opencl_device_worksize
+            # TODO: For BIP-38, the chunksize and opencl workgroup size should
+            #       be detected automatically.
+            if args.bip38:
+                loaded_wallet.chunksize = 16
+            else:
+                loaded_wallet.chunksize = loaded_wallet.opencl_device_worksize
+
 
         print("OpenCL: Using Work Group Size: ", loaded_wallet.chunksize)
         print()
