@@ -1,5 +1,7 @@
 # *btcrecover* - BIP-38 Version ![license](https://img.shields.io/badge/license-GPLv2-blue.svg) #
 
+Latest Version - 1.5.1 (12-25-2020)
+
 *btcrecover* is an open source wallet password and seed recovery tool. It is designed for the case where you already know most of your password or seed phrase, but need assistance in trying different possible combinations.
 
 * Seed/Passphrase Recovery when for: (Recovery without a known address requires an [Address Database](docs/Creating_and_Using_AddressDB.md))
