@@ -21,7 +21,7 @@
 # TODO: put everything in a class?
 # TODO: pythonize comments/documentation
 
-__version__          =  "1.5.0-BTCRecover.com"
+__version__          =  "1.5.1-2020-12-25-BTCRecover.cloud"
 __ordering_version__ = b"0.6.4"  # must be updated whenever password ordering changes
 disable_security_warnings = True
 
