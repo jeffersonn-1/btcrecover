@@ -4902,7 +4902,26 @@ def tokenlist_base_password_generator():
         # TODO:
         #   Be smarter in deciding when to enable this? (currently on if has_any_duplicate_tokens)
         #   Instead of dup checking, write a smarter product (seems hard)?
-        if l_token_combination_dups and \
+        # TODO:
+        #   Right now, trying to remove duplicates with this method if --keep-tokens-order is passed
+        #   will cause some passwords to be skipped, check the following example:
+        #
+        #   Token file:
+        #   -----------
+        #   a b
+        #   a b
+        #   Passwords to try:
+        #   -----------------
+        #   a
+        #   b
+        #   aa
+        #   ba
+        #   ab
+        #   bb
+        #
+        #   Trying to remove duplicates when --keep-tokens-order is passed in the above
+        #   example will skip the 5th password "ab". Fix that.
+        if not args.keep_tokens_order and l_token_combination_dups and \
            l_token_combination_dups.is_duplicate(l_tuple(l_sorted(tokens_combination, key=l_tstr))): continue
 
         # The inner loop iterates through all valid permutations (orderings) of one
