@@ -2326,13 +2326,13 @@ class WalletBIP38(object):
     opencl_algo = -1
 
     def __init__(self, enc_privkey):
-        global pylibscrypt, ecdsa, double_sha256, hash160, normalize, base58, AESModeOfOperationECB, secp256k1_n
-        import pylibscrypt, ecdsa
-        from bitcoinlib.config.secp256k1 import secp256k1_n
-        from bitcoinlib.encoding import double_sha256, hash160
+        global lib, pylibscrypt, ecdsa, double_sha256, hash160, normalize, base58, AESModeOfOperationECB, secp256k1_n
+        import lib.pylibscrypt, ecdsa
+        from lib.bitcoinlib.config.secp256k1 import secp256k1_n
+        from lib.bitcoinlib.encoding import double_sha256, hash160
         from unicodedata import normalize
-        from cashaddress import base58
-        from pyaes import AESModeOfOperationECB
+        from lib.cashaddress import base58
+        from lib.pyaes import AESModeOfOperationECB
 
         self.enc_privkey = base58.b58decode_check(enc_privkey)
         assert len(self.enc_privkey) == 39
@@ -2357,13 +2357,13 @@ class WalletBIP38(object):
 
     def __setstate__(self, state):
         # (re-)load the required libraries after being unpickled
-        global pylibscrypt, ecdsa, double_sha256, hash160, normalize, base58, AESModeOfOperationECB, secp256k1_n
-        import pylibscrypt, ecdsa
-        from bitcoinlib.config.secp256k1 import secp256k1_n
-        from bitcoinlib.encoding import double_sha256, hash160
+        global lib, pylibscrypt, ecdsa, double_sha256, hash160, normalize, base58, AESModeOfOperationECB, secp256k1_n
+        import lib.pylibscrypt, ecdsa
+        from lib.bitcoinlib.config.secp256k1 import secp256k1_n
+        from lib.bitcoinlib.encoding import double_sha256, hash160
         from unicodedata import normalize
-        from cashaddress import base58
-        from pyaes import AESModeOfOperationECB
+        from lib.cashaddress import base58
+        from lib.pyaes import AESModeOfOperationECB
 
         self.__dict__ = state
 
@@ -2404,7 +2404,7 @@ class WalletBIP38(object):
     # This is the time-consuming function executed by worker thread(s). It returns a tuple: if a password
     # is correct return it, else return False for item 0; return a count of passwords checked for item 1
     def _return_verified_password_or_false_cpu(self, passwords):
-        l_scrypt = pylibscrypt.scrypt
+        l_scrypt = lib.pylibscrypt.scrypt
 
         passwords = map(lambda p: normalize("NFC", p).encode("utf_8", "ignore"), passwords)
         for count, password in enumerate(passwords, 1):
